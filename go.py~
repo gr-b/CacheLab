@@ -1,0 +1,33 @@
+import sys
+import os
+
+print("Num Args given: " + str(len(sys.argv)))
+print("Args: ", sys.argv);
+
+cmd1 = "./csim"
+cmd2 = ""
+cmd3 = " -s 2 -E 1 -b 4 -t ./traces/"
+cmd4 = ""
+both = False
+
+for i in range(len(sys.argv)):
+	arg = sys.argv[i]
+	if arg == "ref":
+		cmd2 = "-ref"
+	if arg == "t":
+		cmd4 = sys.argv[i+1]
+	if arg == "b":
+		both = True
+
+cmd = cmd1 + cmd2 + cmd3 + cmd4
+print("Command:")
+os.system(cmd)
+if both:
+	if cmd2 == "-ref":
+		cmd2 = ""
+	else:
+		cmd2 = "-ref"
+	cmd = cmd1 + cmd2 + cmd3 + cmd4
+	print("Cmd2:")
+	os.system(cmd)
+		

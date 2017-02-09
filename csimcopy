@@ -1,0 +1,398 @@
+// Cache Simulator
+// Author: Griffin Bishop
+// WPI Username (login id): grbishop
+
+/*
+struct {
+	bool valid;
+	int tag;
+} lineInfo;
+
+S * E * * */
+
+struct operation{
+    long address;
+    char op_type;
+};
+typedef struct operation Operation;
+
+typedef struct{
+    int tag;
+    int set_number;
+    //int offset;
+} Address_info;
+
+typedef struct{
+    int valid;
+    int tag;
+    int used;
+    char* blockPtr; // Pointer to the array of memory
+} Line;
+
+typedef struct{
+    // A set is a list of lines
+    int last_recently_used;
+    Line** lines;
+} Set;
+
+    // A cache is an array of lines. But we don't know how many sets or lines there
+    // are at compile time so we say a cache is a list of sets, and a set is a list
+    // of lines.
+typedef Set** Cache;
+
+
+#include "cachelab.h"
+#include <getopt.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+
+// globals
+int s;
+int E;
+int b;
+int cache_is_full = 0;
+int misses = 0;
+int hits = 0;
+int evictions = 0;
+
+void print_bits(int* ptr, int nbits){
+    //long mask = pow(2, nbits);
+    //printf("%d %ld\n", nbits, mask);
+    long mask;
+    int i = 0;
+    for(mask = 1;i<nbits;mask <<= 1){
+        char c = ((mask & *ptr) == mask) ? '1' : '0';
+	printf("%c",c);
+	i += 1;
+	if(i % 4 == 0){
+            printf(" ");
+        }
+    }
+    printf("\n");
+}
+
+
+/* Function create_cache
+ * Given s, E, and b, initalize and malloc 
+ * memory for an empty cache.
+ * Return a pointer to the cache.
+ */
+Cache create_cache(int num_set_bits, int lines_per_set, int num_block_bits){
+    // Initalize cache
+    int num_sets = pow(num_set_bits, 2);
+    Cache cache = malloc(sizeof(Set*)*num_sets);    
+
+    int i;
+    for(i=0;i<num_sets;i++){
+        Set* aset = malloc(sizeof(Set));
+        aset->last_recently_used = 1;
+        aset->lines = malloc(sizeof(Line*)*lines_per_set);
+        
+      	//Line* linePtr = aset->lines[0]; 
+	//linePtr = malloc(sizeof(Line));
+	//linePtr->valid = 0;
+        
+
+
+        int j;
+        for(j=0;j<lines_per_set;j++){
+            Line* linePtr = malloc(sizeof(Line));
+	    aset->lines[j] = linePtr;
+            linePtr->valid = 0;
+            linePtr->tag = -1;
+	    linePtr->used = 0;
+	    
+   	    // Now add the block.
+	    char* blockPtr = malloc(sizeof(char)*num_block_bits);
+	    linePtr->blockPtr = blockPtr;
+	    
+   	    int k;
+ 	    for(k=0;k<num_block_bits;k++){
+    	       	blockPtr[k] = 'a' + k; // Initialize memory to 0
+   	    }
+            
+        }
+	cache[i] = aset;
+    }
+
+
+    //Cache* cachePtr = malloc(sizeof(Cache*));
+    //cachePtr = &cache;
+    return cache;
+}
+
+/* Function get_address_info
+ * Given an unsigned long int pointer to an address,
+ * and the number of set bits, and the number of block bits,
+ * produces a pointer to a address info struct.
+ */
+Address_info* get_address_info(unsigned long *address_ptr, int s, int b){
+    Address_info* address_info_ptr = malloc(sizeof(Address_info));
+    
+    int address = *address_ptr;
+    // Addresses are in the form: t tag bits, s set bits, b offset bits
+    // | t |  s  | b |
+    // We need to isolate these parts
+    // Tag is easy, just shift over s+b
+    int tag = address >> (s + b);
+
+    // b doesn't concern the simulation
+
+    // For s, just shift | s | b | over to clear everything but it, 
+    // then shift back, but b bits more, so that we're only left with | s |
+    int shift_by = (64 - (s + b));
+    unsigned long shifted = address << shift_by;
+    unsigned long set_number = shifted >> (shift_by + b);
+    //printf("Set: %lu. Tag: %d\n", set_number, tag);
+
+    address_info_ptr->tag = tag;
+    address_info_ptr->set_number = set_number;
+
+    return address_info_ptr;
+}
+
+/* Function find_line()
+ * Given a set in which we will search for the line with the tag given.
+ * Produces the line with the tag given or -1 if there is no such line.
+ */
+int find_line(Set* in_set, int tag){
+    int line_index = 0;
+    cache_is_full = 1; // Will be changed if an empty line is found.
+    int min_used_index = 0;
+
+    // Loop through the lines
+    for(line_index=0;line_index<E;line_index++){
+	Line* aline = in_set->lines[line_index];
+	if(aline->valid && aline->tag == tag){
+	    // We have a hit!
+	    return line_index;
+ 	} else if (!aline->valid){
+	    cache_is_full = 0;
+	    // The line is empty, so the cache cannot be full.
+	    in_set->last_recently_used = line_index;
+	    // Use the empty line next.
+	} else if (aline->valid){
+	    // The line is valid but not our tag line.
+	    // Update min used index
+            if(aline->used < in_set->lines[min_used_index]->used){
+	  	min_used_index = line_index;
+	    }
+	}
+    }
+    // If we reach this point, it was a miss--there was no line found. 
+    if(cache_is_full){
+	// If cache is full, we need to evict. Update eviction index.
+	in_set->last_recently_used = min_used_index; 	
+    }
+
+    return -1;
+}
+
+/* Function load_line()
+ * Given a set pointer and a tag,
+ * Replaces the line at (last_recently_used) and activates it.
+ */
+void load_line(Set* in_set, int tag){
+    int line_index = in_set->last_recently_used;
+    //--printf("Loading line: %d.\n", line_index);
+    Line* line = in_set->lines[line_index];
+    line->valid = 1;
+    line->tag = tag;
+}
+
+/* Function simulate()
+ * Given a Cache struct and an Address_info struct (tag/set to be operated on)
+ * Produces an integer code representing the outcome of the operation.
+ * 0 : Miss
+ * 1 : Hit
+ * 2 : Miss Eviction
+ */
+int simulate(Cache cache, Address_info* address){
+
+    // Get the set at the index given in the address info
+    Set* set_ptr = cache[address->set_number];
+    int line_index = find_line(set_ptr, address->tag);
+    //--printf("Line: %d\n", line_index);
+    if(line_index != -1){
+     	// There is a line with the tag; Hit!
+	//--printf("Hit! need to update recently used.\n");
+	Line* hit_line = set_ptr->lines[line_index];
+	hit_line->used++;
+	hits++;
+	return 1;
+    } else {
+	// No line with that tag. Miss.
+	misses++;
+	if(cache_is_full){
+	    // We need to evict!
+	    //--printf("Perform an eviction!\n");
+            load_line(set_ptr, address->tag);
+	    evictions++;
+	    return 2;
+	} else {
+	    // Cache is not full, so it's just a normal miss
+	    //--printf("Normal miss. Need to turn line on.\n");
+	    // Line to use should be in last_recently_used
+	    load_line(set_ptr, address->tag);
+	    return 0;
+	}
+    }
+
+    return -1;// something went wrong.
+}
+
+/* Function simulate_helper
+ * Calls simulate() based on the (char action) given.
+ * If L - (Load), call normally.
+ * If S - (Store), call normally.
+ * If M - (Modify), call twice, recording result.
+ * Returns an integer reflecting the result of simulate()
+ */
+int simulate_helper(Cache cache, Address_info* address, char action){
+    int sim_result;
+    if(action == 'L' || action == 'S'){
+ 	sim_result = simulate(cache, address);
+    } else if(action == 'M'){
+	printf("Modify action called, not implemented.\n");
+	sim_result = -1;
+    }
+    return sim_result;
+}
+
+int main(int argc, char* argv[]) {
+    int opt; 
+    int required_flags = 0;
+    char* filename; 
+    int num_set_bits;
+    int lines_per_set;
+    int num_block_bits;
+    int verbose_flag = 0; // Default: Disabled = 0. 
+
+    while ((opt = getopt(argc, argv, "hs:E:b:vt:")) != -1) {
+        switch(opt) {
+        case 's':
+	    num_set_bits = atoi(optarg);
+	    s = num_set_bits;
+	    required_flags += 1;
+	    break;
+	case 'E':
+	    lines_per_set = atoi(optarg);
+	    E = lines_per_set;
+	    required_flags += 1;
+ 	    break;
+        case 'b':
+            num_block_bits = atoi(optarg);
+	    b = num_block_bits;
+	    required_flags += 1;
+	    break;
+    	case 'v':
+            verbose_flag = 1;
+	    break;
+  	case 't':
+	    filename = optarg;
+	    required_flags += 1;
+	    break;
+	default:
+	    printf("Usage: ./csim [-h] [-v] [-s bits] [-E lines]");
+ 	    printf(" [-b bits] [-t filename]\n");
+ 	    exit(EXIT_FAILURE);
+        }
+    }
+	
+    if(required_flags < 4) {
+        printf("Usage: ./csim [-h] [-v] [-s bits] [-E lines]");
+ 	printf(" [-b bits] [-t filename]\n");
+ 	exit(EXIT_FAILURE);
+    }
+
+    printf("Cache Simulator - Griffin Bishop - grbishop\n");
+    /*printf("Set index bits: %d. ", num_set_bits);
+    printf("Associativity: %d. ", lines_per_set);
+    printf("Bits per block: %d. \n", num_block_bits);
+
+    printf("Trace file: %s.\n", filename);  
+    if(verbose_flag){
+        printf("Verbose mode enabled.\n");  
+    }*/
+    
+    /////////////// We have arguments, now parse the tracefile ////////////////
+
+    FILE* trace = fopen(filename,"r");
+    if(trace){
+        //printf("File opened successfully.\n");
+    } else {
+        fprintf(stderr, "Could not open file: %s.\n", filename);
+        exit(EXIT_FAILURE);
+    } 
+
+
+    // Build a cache structure on which the simulation will be run.
+    ////int num_sets = pow(num_set_bits, 2); // 2^set_bits sets.
+    Cache cache = create_cache(num_set_bits, lines_per_set, num_block_bits);
+    /* The following shows the structure of a cache:
+    Set* setPtr = cache[0];
+    Set aset = *setPtr;
+    Line* linePtr = aset.lines[0];
+    Line aline = *linePtr;
+    int i;
+    for(i=0;i<num_block_bits;i++){
+   	 char block_cell = aline.blockPtr[i];
+   	 printf("%c\n",block_cell);
+    } */
+
+
+    char* type_char_ptr = malloc(sizeof(char));
+    // Is unsigned long because int is too small to hold an 8 character hex val
+    unsigned long* address_ptr = malloc(sizeof(unsigned long));
+    int* size_ptr = malloc(sizeof(int));
+
+    int matched;
+ 
+    while((matched = fscanf(trace, " %c %lx,%d", 
+	type_char_ptr, address_ptr, size_ptr)) == 3) 
+    {
+	if(*type_char_ptr == 'I') { // We don't care about I's
+            goto ALLOCATE; // Skip over the structure allocation
+        }
+
+	Address_info* address = get_address_info(address_ptr, 
+			num_set_bits, num_block_bits);
+	
+	Operation* op = malloc(sizeof(Operation));
+	op->address = *address_ptr;
+	op->op_type = *type_char_ptr;	
+
+	int result = simulate_helper(cache, address, *type_char_ptr);
+	
+	if(verbose_flag){
+	    printf("Type: %c, Address: %ld, Set: %d, Tag: %d", op->op_type,
+		op->address, address->set_number, address->tag);
+	
+	
+	    if(result == 0){
+	        printf(" miss");
+	    } else if(result == 1){
+	        printf(" hit");
+	    } else if(result == 2){
+	        printf(" miss eviction");
+	    }
+	    printf("\n");
+	    //printf("SimRes: %d\n", result);
+        }
+	
+	ALLOCATE:
+	// Free and Allocate space for the next thing.
+	free(type_char_ptr);
+	free(address_ptr);
+        type_char_ptr = malloc(sizeof(char));
+        address_ptr = malloc(sizeof(unsigned long));
+    }
+
+    fclose(trace);
+    printSummary(hits, misses, evictions);
+    return 0;
+}
+
+
